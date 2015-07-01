@@ -1,0 +1,37 @@
+name:                biegunka-svn
+version:             0.1.0
+synopsis:            SVN support for Biegunka
+description:
+  See README.markdown
+homepage:            https://github.com/biegunka/biegunka-svn
+license:             BSD2
+license-file:        LICENSE
+author:              Matvey Aksenov
+maintainer:          matvey.aksenov@gmail.com
+copyright:           Matvey Aksenov 2015
+category:            Network
+build-type:          Simple
+cabal-version:       >= 1.10
+extra-source-files:
+  README.markdown
+
+source-repository head
+  type: git
+  location: https://github.com/biegunka/biegunka-svn
+
+library
+  default-language:
+    Haskell2010
+  build-depends:
+      base         >= 4.8 && < 5
+    , biegunka
+    , directory
+    , process
+    , transformers >= 0.4
+  hs-source-dirs:
+    src
+  exposed-modules:
+    Control.Biegunka.Source.Svn
+  ghc-options:
+    -Wall
+    -Werror
