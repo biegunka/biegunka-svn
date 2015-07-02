@@ -3,6 +3,12 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Control.Biegunka.Source.Svn
   ( svn
+  , Svn
+  , Repository
+  , Config
+  , url
+  , path
+  , ignoreExternals
   ) where
 
 import           Control.Monad ((<=<))
@@ -23,32 +29,50 @@ import           Control.Biegunka.Language (Scope(Sources, Actions))
 import           Control.Biegunka.Script (Script, sourced)
 
 
+svn :: Svn Repository FilePath -> Script 'Actions () -> Script 'Sources ()
+svn f actions =
+  sourced "svn" configUrl configPath actions (updateSvn config)
+ where
+  config@Config { configUrl, configPath } =
+    f defaultConfig
+
+type Svn a b = Config () () -> Config a b
+
+url :: Repository -> Config a b -> Config Repository b
+url u config = config { configUrl = u }
+
+path :: Repository -> Config a b -> Config a FilePath
+path p config = config { configPath = p }
+
+ignoreExternals :: Config a b -> Config a b
+ignoreExternals config = config { configIgnoreExternals = True }
+
 type Repository = String
 
-svn :: Repository -> FilePath -> Script 'Actions () -> Script 'Sources ()
-svn url fp actions =
-  sourced "svn" url fp actions (updateSvn url)
-
-newtype Out = Out
-  { outStd :: String
+data Config a b = Config
+  { configUrl             :: a
+  , configPath            :: b
+  , configIgnoreExternals :: Bool
   } deriving (Show, Eq)
 
-data Err = Err
-  { errExitCode :: Int
-  , errStd      :: String
-  } deriving (Show, Eq)
+defaultConfig :: Config () ()
+defaultConfig = Config
+  { configUrl             = ()
+  , configPath            = ()
+  , configIgnoreExternals = False
+  }
 
-updateSvn :: Repository -> FilePath -> IO (Maybe String)
-updateSvn url fp = do
+updateSvn :: Config Repository a -> FilePath -> IO (Maybe String)
+updateSvn config fp = do
   res <- runExceptT $
     liftIO (doesDirectoryExist fp) >>= \case
       True -> do
         before <- revision fp
-        _ <- svnUp fp
+        _ <- svnUp config fp
         after <- revision fp
         return (bool (Just (printf "‘%s’ → ‘%s’" before after)) Nothing (before == after))
       False -> do
-        _ <- svnCheckout url fp
+        _ <- svnCheckout config fp
         after <- revision fp
         return (Just (printf "checked ‘%s’ out" after))
   either (sourceFailure . errDisplay) return res
@@ -60,12 +84,14 @@ errDisplay Err { errExitCode, errStd } =
   fromString (printf "`svn` exited with exit code %d: %s" errExitCode errStd)
 
 -- | Run @svn checkout@.
-svnCheckout :: Repository -> FilePath -> ExceptT Err IO Out
-svnCheckout uri fp = runSvn ["checkout", "--ignore-externals", uri, fp] Nothing
+svnCheckout :: Config Repository a -> FilePath -> ExceptT Err IO Out
+svnCheckout Config { configUrl, configIgnoreExternals } fp =
+  runSvn (["checkout", configUrl, fp] ++ ["--ignore-externals" | configIgnoreExternals]) Nothing
 
 -- | Run @svn update@
-svnUp :: FilePath -> ExceptT Err IO Out
-svnUp cwd = runSvn ["update", "--ignore-externals"] (Just cwd)
+svnUp :: Config a b -> FilePath -> ExceptT Err IO Out
+svnUp Config { configIgnoreExternals } cwd =
+  runSvn ("update" : ["--ignore-externals" | configIgnoreExternals]) (Just cwd)
 
 -- | Run @svn info@.
 svnInfo :: FilePath -> ExceptT Err IO Out
@@ -79,6 +105,15 @@ runSvn args cwd = ExceptT $ do
   return (exitCode (\errExitCode -> Left Err { errExitCode, errStd }) (Right Out { outStd }) ec)
  where
   proc = (P.proc "svn" args) { P.cwd = cwd }
+
+newtype Out = Out
+  { outStd :: String
+  } deriving (Show, Eq)
+
+data Err = Err
+  { errExitCode :: Int
+  , errStd      :: String
+  } deriving (Show, Eq)
 
 -- | Parse revision number for @svn info@ output.
 parseRevision :: Out -> Maybe Int
