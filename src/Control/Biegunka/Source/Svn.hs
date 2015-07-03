@@ -11,8 +11,8 @@ module Control.Biegunka.Source.Svn
   , ignoreExternals
   ) where
 
-import           Control.Monad ((<=<))
-import           Control.Monad.Trans.Except (ExceptT(ExceptT), runExceptT)
+import           Control.Monad ((<=<), when)
+import           Control.Monad.Trans.Except (ExceptT(ExceptT), runExceptT, throwE)
 import           Control.Monad.IO.Class (liftIO)
 import           Data.Bool (bool)
 import qualified Data.List as List
@@ -67,21 +67,27 @@ updateSvn config fp = do
   res <- runExceptT $
     liftIO (doesDirectoryExist fp) >>= \case
       True -> do
-        before <- revision fp
-        _ <- svnUp config fp
-        after <- revision fp
-        return (bool (Just (printf "‘%s’ → ‘%s’" before after)) Nothing (before == after))
+        maybeUrl <- fmap parseSvnUrl (svnInfo fp)
+        case maybeUrl of
+          Nothing -> throwCustom "Path is a working copy, but `svn info` does not contain the URL"
+          Just remoteUrl -> do
+            when (remoteUrl /= configUrl config)
+                 (throwCustom "Path is a working copy, but the URL is wrong")
+            before <- revision fp
+            _ <- svnUp config fp
+            after <- revision fp
+            return (bool (Just (printf "‘%s’ → ‘%s’" before after)) Nothing (before == after))
       False -> do
         _ <- svnCheckout config fp
         after <- revision fp
         return (Just (printf "checked ‘%s’ out" after))
   either (sourceFailure . errDisplay) return res
  where
-  revision = fmap (maybe "unknown" show . parseRevision) . svnInfo
+  revision = fmap (maybe "unknown" show . parseSvnRevision) . svnInfo
 
 errDisplay :: IsString s => Err -> s
-errDisplay Err { errExitCode, errStd } =
-  fromString (printf "`svn` exited with exit code %d: %s" errExitCode errStd)
+errDisplay (ErrSvn ec err) = fromString (printf "`svn` exited with exit code %d: %s" err ec)
+errDisplay (ErrCustom err) = fromString err
 
 -- | Run @svn checkout@.
 svnCheckout :: Config Repository a -> FilePath -> ExceptT Err IO Out
@@ -101,25 +107,34 @@ svnInfo cwd = runSvn ["info"] (Just cwd)
 -- standard error contents or standard out contents.
 runSvn :: [String] -> Maybe FilePath -> ExceptT Err IO Out
 runSvn args cwd = ExceptT $ do
-  (ec, outStd, errStd) <- P.readCreateProcessWithExitCode proc ""
-  return (exitCode (\errExitCode -> Left Err { errExitCode, errStd }) (Right Out { outStd }) ec)
+  (ec, out, err) <- P.readCreateProcessWithExitCode proc ""
+  return (exitCode (Left . ErrSvn err) (Right Out { out }) ec)
  where
   proc = (P.proc "svn" args) { P.cwd = cwd }
 
 newtype Out = Out
-  { outStd :: String
+  { out :: String
   } deriving (Show, Eq)
 
-data Err = Err
-  { errExitCode :: Int
-  , errStd      :: String
-  } deriving (Show, Eq)
+-- | The error is either a failed SVN command with its exit code and standard error
+-- or a custom error message.
+data Err = ErrSvn String Int | ErrCustom String
+    deriving (Show, Eq)
+
+throwCustom :: String -> ExceptT Err IO a
+throwCustom = throwE . ErrCustom
+
+-- | Parse revision number from @svn info@ output.
+parseSvnRevision :: Out -> Maybe Int
+parseSvnRevision = readMaybe <=< parseInfo "Revision: "
+
+-- | Parse URL from @svn info@ output.
+parseSvnUrl :: Out -> Maybe String
+parseSvnUrl = parseInfo "URL: "
 
 -- | Parse revision number for @svn info@ output.
-parseRevision :: Out -> Maybe Int
-parseRevision = (readMaybe <=< listToMaybe) . mapMaybe (List.stripPrefix revisionPrefix) . lines . outStd
- where
-  revisionPrefix = "Revision: "
+parseInfo :: String -> Out -> Maybe String
+parseInfo prefix = listToMaybe . mapMaybe (List.stripPrefix prefix) . lines . out
 
 -- | Eliminator for 'ExitCode'.
 exitCode :: (Int -> a) -> a -> ExitCode -> a
