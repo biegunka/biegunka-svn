@@ -1,6 +1,10 @@
-{ nixpkgs ? import <nixpkgs> {}, compiler ? "ghc7101" }:
-nixpkgs.pkgs.haskell.packages.${compiler}.callPackage ./package.nix {
-  mkDerivation = args: nixpkgs.pkgs.haskell.packages.${compiler}.mkDerivation(args // {
-    buildTools = (if args ? buildTools then args.buildTools else []) ++ [ nixpkgs.pkgs.subversion ];
-  });
-}
+{ nixpkgs ? import <nixpkgs> {}, compiler ? "ghc7101" }: let
+  pkgs = nixpkgs.pkgs.haskell.packages.${compiler};
+  biegunka = if pkgs ? biegunka then pkgs.biegunka else pkgs.callPackage ./biegunka.nix {};
+in
+  pkgs.callPackage ./package.nix {
+    mkDerivation = args: pkgs.mkDerivation(args // {
+      buildTools = (if args ? buildTools then args.buildTools else []) ++ [ nixpkgs.pkgs.subversion ];
+    });
+    biegunka = biegunka;
+  }

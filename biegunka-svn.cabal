@@ -26,12 +26,41 @@ library
       base         >= 4.8 && < 5
     , biegunka
     , directory
+    , lens
     , process
     , transformers >= 0.4
   hs-source-dirs:
     src
   exposed-modules:
     Control.Biegunka.Source.Svn
+    Control.Biegunka.Source.Svn.Internal
+  ghc-options:
+    -Wall
+    -Werror
+
+test-suite spec
+  default-language:
+    Haskell2010
+  type:
+    exitcode-stdio-1.0
+  build-depends:
+      base                    >= 4.8 && < 5
+    , biegunka-svn
+    , directory
+    , filepath
+    , hspec
+    , hspec-expectations-lens
+    , lens
+    , process
+    , temporary
+    , transformers
+  hs-source-dirs:
+    test
+  main-is:
+    Spec.hs
+  other-modules:
+    Control.Biegunka.Source.SvnSpec
+    SpecHelper
   ghc-options:
     -Wall
     -Werror
