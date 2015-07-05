@@ -1,5 +1,7 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE TypeFamilies #-}
 module Control.Biegunka.Source.Svn.Internal
@@ -32,32 +34,23 @@ import           Text.Printf (printf)
 import           Text.Read (readMaybe)
 
 import           Control.Biegunka.Execute.Exception (sourceFailure)
-import           Control.Biegunka.Language (Scope(Sources, Actions))
+import           Control.Biegunka.Language (Scope(Sources, Actions), Source(..))
 import           Control.Biegunka.Script (Script, sourced)
+import           Control.Biegunka.Source (Repository, HasUrl(..), HasPath(..))
 
 
 svn :: Svn Repository FilePath -> Script 'Actions () -> Script 'Sources ()
-svn f actions =
-  sourced "svn" configUrl configPath actions (update config)
+svn f = sourced Source
+  { sourceType   = "svn"
+  , sourceFrom   = configUrl
+  , sourceTo     = configPath
+  , sourceUpdate = update config
+  }
  where
   config@Config { configUrl, configPath } =
     f defaultConfig
 
 type Svn a b = Config () () -> Config a b
-
-url :: Repository -> Config a b -> Config Repository b
-url u config = config { configUrl = u }
-
-path :: Repository -> Config a b -> Config a FilePath
-path p config = config { configPath = p }
-
-ignoreExternals :: Config a b -> Config a b
-ignoreExternals config = config { configIgnoreExternals = True }
-
-revision :: String -> Config a b -> Config a b
-revision r config = config { configRevision = r }
-
-type Repository = String
 
 data Config a b = Config
   { configUrl             :: a
@@ -74,8 +67,20 @@ defaultConfig = Config
   , configRevision        = "HEAD"
   }
 
+instance HasUrl (Config a b) (Config Repository b) Repository where
+  url u config = config { configUrl = u }
+
+instance HasPath (Config a b) (Config a FilePath) FilePath where
+  path p config = config { configPath = p }
+
+ignoreExternals :: Config a b -> Config a b
+ignoreExternals config = config { configIgnoreExternals = True }
+
+revision :: String -> Config a b -> Config a b
+revision r config = config { configRevision = r }
+
 class Update m where
-  update :: Config Repository a -> FilePath -> m (Maybe String)
+  update :: Config Repository a -> FilePath -> m (Maybe String, IO (Maybe String))
 
 instance Update IO where
   update config =
@@ -87,7 +92,7 @@ instance (e ~ Err, MonadIO m) => Update (ExceptT e m) where
       False -> do
         _ <- svnCheckout config sourceRoot
         after <- revisionInfo sourceRoot
-        return (pure (printf "‘none’ → ‘%s’" after))
+        return (pure (printf "‘none’ → ‘%s’" after), return Nothing)
       True -> do
         maybeUrl <- fmap parseSvnUrl (svnInfo sourceRoot)
         case maybeUrl of
@@ -98,7 +103,7 @@ instance (e ~ Err, MonadIO m) => Update (ExceptT e m) where
             before <- revisionInfo sourceRoot
             _ <- svnUp config sourceRoot
             after <- revisionInfo sourceRoot
-            return (printf "‘%s’ → ‘%s’" before after <$ guard (before /= after))
+            return (printf "‘%s’ → ‘%s’" before after <$ guard (before /= after), return Nothing)
    where
     revisionInfo = fmap (maybe "unknown" show . parseSvnRevision) . svnInfo
 

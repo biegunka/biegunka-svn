@@ -2,7 +2,7 @@ biegunka-svn
 ============
 [![Build Status](https://secure.travis-ci.org/biegunka/biegunka-svn.png?branch=master)](http://travis-ci.org/biegunka/biegunka-svn)
 
-[SVN](https://subversion.apache.org/) repositories as `'Source`s.
+[SVN](https://subversion.apache.org/) repositories as `'Sources`.
 
 Installation
 ------------
