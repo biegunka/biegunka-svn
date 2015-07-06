@@ -3,6 +3,7 @@
   biegunka = if pkgs ? biegunka then pkgs.biegunka else pkgs.callPackage ./biegunka.nix {
     mkDerivation = args: pkgs.mkDerivation(args // {
       buildTools = (if args ? buildTools then args.buildTools else []) ++ [ nixpkgs.pkgs.git ];
+      doCheck = false;
     });
   };
 in
