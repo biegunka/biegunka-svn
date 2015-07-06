@@ -5,7 +5,7 @@ before_install:
   - source $HOME/.nix-profile/etc/profile.d/nix.sh
 
 install:
-  - nix-shell -p 'cabal2nix' --run 'cabal2nix https://github.com/biegunka/biegunka > biegunka.nix'
+  - nix-shell -p 'cabal2nix' --run 'cabal2nix https://github.com/biegunka/biegunka --revision 205bf89c3040dd33334d54483c9e17a6f2273497 > biegunka.nix'
   - nix-shell --run 'true'
 
 script:
