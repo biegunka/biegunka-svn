@@ -11,7 +11,6 @@ in
     buildInputs = [ ghc cabal-install ] ++ pkg.env.buildInputs;
     shellHook = ''
       ${pkg.env.shellHook}
-      export IN_WHICH_NIX_SHELL=${name}
       cabal configure --package-db=$NIX_GHC_LIBDIR/package.conf.d --enable-tests
     '';
   }

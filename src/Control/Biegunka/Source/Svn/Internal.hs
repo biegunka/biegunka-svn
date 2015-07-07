@@ -3,17 +3,17 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE TypeFamilies #-}
 module Control.Biegunka.Source.Svn.Internal
-  ( svn
-  , Svn
-  , Repository
+  ( Svn
+  , svn
+  , Url
   , Config(..)
   , url
   , path
   , ignoreExternals
   , revision
-  , update
+  , ioUpdate
+  , exceptUpdate
   , defaultConfig
   , Err(..)
   , _ErrSvn
@@ -21,7 +21,7 @@ module Control.Biegunka.Source.Svn.Internal
   ) where
 
 import           Control.Lens (Prism', prism')
-import           Control.Monad ((<=<), guard, when)
+import           Control.Monad ((<=<), guard)
 import           Control.Monad.Trans.Except (ExceptT(ExceptT), runExceptT, throwE)
 import           Control.Monad.IO.Class (MonadIO(liftIO))
 import qualified Data.List as List
@@ -36,15 +36,15 @@ import           Text.Read (readMaybe)
 import           Control.Biegunka.Execute.Exception (sourceFailure)
 import           Control.Biegunka.Language (Scope(Sources, Actions), Source(..))
 import           Control.Biegunka.Script (Script, sourced)
-import           Control.Biegunka.Source (Repository, HasUrl(..), HasPath(..))
+import           Control.Biegunka.Source (Url, HasUrl(..), HasPath(..))
 
 
-svn :: Svn Repository FilePath -> Script 'Actions () -> Script 'Sources ()
+svn :: Svn Url FilePath -> Script 'Actions () -> Script 'Sources ()
 svn f = sourced Source
   { sourceType   = "svn"
   , sourceFrom   = configUrl
   , sourceTo     = configPath
-  , sourceUpdate = update config
+  , sourceUpdate = ioUpdate config
   }
  where
   config@Config { configUrl, configPath } =
@@ -67,7 +67,7 @@ defaultConfig = Config
   , configRevision        = "HEAD"
   }
 
-instance HasUrl (Config a b) (Config Repository b) Repository where
+instance HasUrl (Config a b) (Config Url b) Url where
   url u config = config { configUrl = u }
 
 instance HasPath (Config a b) (Config a FilePath) FilePath where
@@ -79,40 +79,50 @@ ignoreExternals config = config { configIgnoreExternals = True }
 revision :: String -> Config a b -> Config a b
 revision r config = config { configRevision = r }
 
-class Update m where
-  update :: Config Repository a -> FilePath -> m (Maybe String, IO (Maybe String))
+ioUpdate :: Config Url a -> FilePath -> IO (Maybe String, IO (Maybe String))
+ioUpdate config sourceRoot = toIo . (fmap . fmap) toIo $ exceptUpdate config sourceRoot
 
-instance Update IO where
-  update config =
-    either (sourceFailure . errDisplay) return <=< runExceptT . update config
-
-instance (e ~ Err, MonadIO m) => Update (ExceptT e m) where
-  update config sourceRoot =
-    liftIO (doesDirectoryExist sourceRoot) >>= \case
-      False -> do
-        _ <- svnCheckout config sourceRoot
-        after <- revisionInfo sourceRoot
-        return (pure (printf "‘none’ → ‘%s’" after), return Nothing)
-      True -> do
-        maybeUrl <- fmap parseSvnUrl (svnInfo sourceRoot)
-        case maybeUrl of
-          Nothing -> throwCustom "Path is a working copy, but `svn info` does not contain the URL"
-          Just remoteUrl -> do
-            when (remoteUrl /= configUrl config)
-                 (throwCustom "Path is a working copy, but the URL is wrong")
+exceptUpdate :: MonadIO m => Config Url a -> FilePath -> ExceptT Err m (Maybe String, ExceptT Err m (Maybe String))
+exceptUpdate config@Config { configUrl } sourceRoot =
+  liftIO (doesDirectoryExist sourceRoot) >>= \case
+    False -> return (pure "first checkout", finishCheckout config sourceRoot)
+    True -> do
+      maybeUrl <- fmap parseSvnUrl (svnInfo sourceRoot)
+      case maybeUrl of
+        Just remoteUrl
+          | remoteUrl == configUrl -> do
             before <- revisionInfo sourceRoot
-            _ <- svnUp config sourceRoot
-            after <- revisionInfo sourceRoot
-            return (printf "‘%s’ → ‘%s’" before after <$ guard (before /= after), return Nothing)
-   where
-    revisionInfo = fmap (maybe "unknown" show . parseSvnRevision) . svnInfo
+            after <- revisionInfo configUrl
+            return (printf "‘%s’ → ‘%s’" before after <$ guard (before /= after), finishUpdate config sourceRoot)
+          | otherwise -> throwCustom (printf "The working copy points to the wrong repository.\nExpected: ‘%s’\n But got: ‘%s’" remoteUrl configUrl)
+        Nothing -> throwCustom "Path is a working copy, but ‘svn info’ does not contain the URL"
+
+finishCheckout :: MonadIO m => Config Url a -> FilePath -> ExceptT Err m (Maybe String)
+finishCheckout config sourceRoot = do
+  _ <- svnCheckout config sourceRoot
+  after <- revisionInfo sourceRoot
+  return (pure (printf "‘none’ → ‘%s’" after))
+
+finishUpdate :: MonadIO m => Config Url a -> FilePath -> ExceptT Err m (Maybe String)
+finishUpdate config@Config { configUrl } sourceRoot = do
+  before <- revisionInfo sourceRoot
+  _ <- svnUp config sourceRoot
+  after <- revisionInfo configUrl
+  return (printf "‘%s’ → ‘%s’" before after <$ guard (before /= after))
+
+revisionInfo :: MonadIO m => String -> ExceptT Err m String
+revisionInfo = fmap (maybe "unknown" show . parseSvnRevision) . svnInfo
+
+-- | Prettify and throw an 'Err' as a 'SourceException' exception.
+toIo :: ExceptT Err IO c -> IO c
+toIo = either (sourceFailure . errDisplay) return <=< runExceptT
 
 errDisplay :: IsString s => Err -> s
 errDisplay (ErrSvn ec err) = fromString (printf "`svn` exited with exit code %d: %s" err ec)
 errDisplay (ErrCustom err) = fromString err
 
 -- | Run @svn checkout@.
-svnCheckout :: MonadIO m => Config Repository a -> FilePath -> ExceptT Err m Out
+svnCheckout :: MonadIO m => Config Url a -> FilePath -> ExceptT Err m Out
 svnCheckout Config { configUrl, configIgnoreExternals, configRevision } fp =
   runSvn (["checkout", configUrl, "--revision", configRevision, fp] ++ ["--ignore-externals" | configIgnoreExternals]) Nothing
 
@@ -122,8 +132,8 @@ svnUp Config { configIgnoreExternals, configRevision } cwd =
   runSvn (["update", "--revision", configRevision] ++ ["--ignore-externals" | configIgnoreExternals]) (Just cwd)
 
 -- | Run @svn info@.
-svnInfo :: MonadIO m => FilePath -> ExceptT Err m Out
-svnInfo cwd = runSvn ["info"] (Just cwd)
+svnInfo :: MonadIO m => String -> ExceptT Err m Out
+svnInfo repository = runSvn ["info", repository] Nothing
 
 -- | Run an SVN command and return either non-zero exit code and
 -- standard error contents or standard out contents.

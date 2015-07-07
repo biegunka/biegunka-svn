@@ -3,7 +3,7 @@ module Control.Biegunka.Source.SvnSpec (spec) where
 import           Control.Lens
 import           Control.Monad.IO.Class (MonadIO)
 import           Control.Monad.Trans.Except (runExceptT)
-import           Data.List.Lens (suffixed)
+import           Data.List.Lens (prefixed, suffixed)
 import           System.Directory (createDirectory)
 import           System.FilePath (combine, addExtension)
 import           System.IO.Temp (withSystemTempDirectory)
@@ -59,7 +59,7 @@ spec =
             faux <- buildFaux tmpDir "faux" fauxHelloWorld
             _ <- updateWorkcopy (local faux . revision "1") tmpDir
             result <- updateWorkcopy (Svn.url "http://example.com") tmpDir
-            result `shouldHave` _Left._ErrCustom.suffixed "the URL is wrong"
+            result `shouldHave` _Left._ErrCustom.prefixed "The working copy points to the wrong repository."
 
         context "when it's bogus" $
           it "responds with an error" $ \tmpDir -> do
@@ -76,11 +76,12 @@ buildFaux root prefix withFauxWorkcopy = do
   _ <- withFauxWorkcopy fauxWorkcopy
   return fauxRepository
 
-updateWorkcopy :: MonadIO m => Svn Svn.Repository a -> FilePath -> m (Either Svn.Err (Maybe String))
-updateWorkcopy f tmpDir =
-  runExceptT (update (f defaultConfig) (combine tmpDir "workcopy"))
+updateWorkcopy :: MonadIO m => Svn Url a -> FilePath -> m (Either Svn.Err (Maybe String))
+updateWorkcopy f tmpDir = runExceptT $ do
+  (_, finish) <- exceptUpdate (f defaultConfig) (combine tmpDir "workcopy")
+  finish
 
-local :: FilePath -> Svn.Config a b -> Svn.Config Svn.Repository b
+local :: FilePath -> Svn.Config a b -> Svn.Config Url b
 local fp = Svn.url ("file://" ++ fp)
 
 addEverythingAndCommit :: FilePath -> IO ()
