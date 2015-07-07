@@ -1,7 +1,8 @@
+-- | SVN repositories as ''Sources'.
 module Control.Biegunka.Source.Svn
-  ( svn
-  , Svn
-  , Repository
+  ( Svn
+  , svn
+  , Url
   , Config
   , url
   , path
